@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
@@ -13,19 +15,43 @@ import (
 
 func handleConnection(clientConn net.Conn, proxyURL *url.URL, targetAddress string) {
 	defer clientConn.Close()
+
+	var proxyConn net.Conn
+	var err error
+
 	// Connect to the proxy server
-	proxyConn, err := net.Dial("tcp", proxyURL.Host)
+	if proxyURL.Scheme == "https" {
+		// For HTTPS proxies, use TLS
+		proxyConn, err = tls.Dial("tcp", proxyURL.Host, &tls.Config{
+			InsecureSkipVerify: true, // Note: This skips certificate verification. Use with caution.
+		})
+	} else {
+		// For HTTP proxies, use regular TCP connection
+		proxyConn, err = net.Dial("tcp", proxyURL.Host)
+	}
+
 	if err != nil {
 		fmt.Printf("Failed to connect to proxy: %v\n", err)
 		return
 	}
 	defer proxyConn.Close()
+
 	connectReq := &http.Request{
 		Method: http.MethodConnect,
 		URL:    &url.URL{Opaque: targetAddress},
 		Host:   targetAddress,
 		Header: make(http.Header),
 	}
+
+	// Add basic auth header if credentials are provided
+	if proxyURL.User != nil {
+		username := proxyURL.User.Username()
+		password, _ := proxyURL.User.Password()
+		auth := username + ":" + password
+		basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
+		connectReq.Header.Add("Proxy-Authorization", basicAuth)
+	}
+
 	err = connectReq.Write(proxyConn)
 	if err != nil {
 		fmt.Printf("Failed to write CONNECT request: %v\n", err)
